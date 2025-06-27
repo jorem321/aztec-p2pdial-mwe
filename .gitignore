@@ -1,6 +1,6 @@
 # Compiled binaries (project-specific)
-aztec_ping
-aztec_status
+/ping
+/status
 
 # Go build artifacts
 *.exe

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 
@@ -18,22 +19,22 @@ import (
 )
 
 const (
-	AZTEC_STATUS_PROTOCOL = "/aztec/req/status/0.1.0"
+	AZTEC_PING_PROTOCOL = "/aztec/req/ping/0.1.0"
 )
 
 func main() {
-	// Parse target peer from command line
+	// Suppress libp2p logs for cleaner output
+	golog.SetAllLoggers(golog.LevelError)
+
+	// Parse command line arguments
 	targetF := flag.String("d", "", "target peer to dial")
 	flag.Parse()
 
 	if *targetF == "" {
-		log.Fatal("Please provide a target peer to dial with -d")
+		log.Fatal("Please provide a target peer with -d")
 	}
 
-	// Set log level
-	golog.SetAllLoggers(golog.LevelWarn) // Reduce noise
-
-	// Create minimal host
+	// Create a libp2p host
 	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
 	if err != nil {
 		log.Fatal(err)
@@ -42,53 +43,56 @@ func main() {
 	host, err := libp2p.New(
 		libp2p.Identity(priv),
 		libp2p.Transport(tcp.NewTCPTransport),
-		libp2p.NoListenAddrs, // Don't listen, just dial out
 		libp2p.DisableRelay(),
+		libp2p.Ping(false), // Disable automatic ping service
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer host.Close()
 
-	// Parse target multiaddr
+	// Parse target peer multiaddr
 	maddr, err := ma.NewMultiaddr(*targetF)
 	if err != nil {
-		log.Fatal("Invalid multiaddr:", err)
+		log.Fatal(err)
 	}
 
-	// Extract peer info
 	info, err := peer.AddrInfoFromP2pAddr(maddr)
 	if err != nil {
-		log.Fatal("Invalid peer address:", err)
+		log.Fatal(err)
 	}
 
-	// Add to peerstore
+	// Add peer to peerstore
 	host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
 
-	// Open stream and send status request
-	log.Println("Requesting status from Aztec node...")
-	s, err := host.NewStream(context.Background(), info.ID, AZTEC_STATUS_PROTOCOL)
+	// Open stream to target peer
+	s, err := host.NewStream(context.Background(), info.ID, AZTEC_PING_PROTOCOL)
 	if err != nil {
-		log.Fatal("Failed to open stream:", err)
+		log.Fatal("failed to open stream:", err)
 	}
 	defer s.Close()
 
-	// Send status request
-	_, err = s.Write([]byte("status"))
+	// Send ping request
+	_, err = s.Write([]byte("ping"))
 	if err != nil {
-		log.Fatal("Failed to send request:", err)
+		log.Fatal("failed to send ping:", err)
 	}
 
-	// Signal end of request
-	s.CloseWrite()
+	// Close write side to signal end of request
+	if err := s.CloseWrite(); err != nil {
+		log.Fatal("failed to close write:", err)
+	}
 
 	// Read response
 	response, err := io.ReadAll(s)
 	if err != nil {
-		log.Fatal("Failed to read response:", err)
+		log.Fatal("failed to read response:", err)
 	}
 
-	// Display results
-	log.Printf("Status response (%d bytes): %q", len(response), response)
-	log.Printf("Status response (hex): %x", response)
+	// Parse and display response
+	if len(response) >= 6 && string(response[5:]) == "pong" {
+		fmt.Println("✅ pong")
+	} else {
+		fmt.Printf("Response: %q\n", response)
+	}
 }
